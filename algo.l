@@ -6,41 +6,40 @@
 
 %%
 
-"\\SET"         { return TSET; }
-"\\RETURN"      { return TRETURN; }
-"\\IF"          { return TIF; }
-"\\ELSE"        { return TELSE; }
-"\\DOWHILE"     { return TDOWHILE; }
-"\\DOFORI"      { return TDOFORI; }
-"\\CALL{"             { return TCALL; }
-"\\begin{algo}{"      { return TBEGINALGO; }
-"\\end{algo}"         { return TENDALGO; }
+"\\SET"                 { return TSET; }
+"\\RETURN"              { return TRETURN; }
+"\\IF{"                 { return TIF; }
+"\\ELSE"                { return TELSE; }        /* pas encore utilisé */
+"\\DOWHILE{"            { return TDOWHILE; }     /* pas encore utilisé */
+"\\DOFORI{"             { return TDOFORI; }
+"\\OD"                  { return TOD; }          /* fin de DOFORI      */
+"\\CALL{"               { return TCALL; }
+"\\begin{algo}{"        { return TBEGINALGO; }
+"\\end{algo}"           { return TENDALGO; }
 
-[0-9]+          { yylval.ival = atoi(yytext); return NUMBER; }
-[a-zA-Z_][a-zA-Z0-9_]* { yylval.str = strdup(yytext); return IDENTIFIER; }
+"{"                     { return LBRACE; }
+"}"                     { return RBRACE; }
+","                     { return COMMA; }
 
-"{"             { return LBRACE; }
-"}"             { return RBRACE; }
-","             { return COMMA; }
-"("             { return LPAREN; }
-")"             { return RPAREN; }
-"=="            { return EQ; }
-"!="            { return NEQ; }
-"<="            { return LE; }
-">="            { return GE; }
-"<"             { return LT; }
-">"             { return GT; }
-"&&"            { return AND; }
-"||"            { return OR; }
-"!"             { return NOT; }
-"+"             { return PLUS; }
-"-"             { return MINUS; }
-"*"             { return TIMES; }
-"/"             { return DIVIDE; }
-"="             { return ASSIGN; }
+"=="                    { return EQ; }
+"!="                    { return NEQ; }
+"<="                    { return LE; }
+">="                    { return GE; }
+"<"                     { return LT; }
+">"                     { return GT; }
+"&&"                    { return AND; }
+"||"                    { return OR; }
+"!"                     { return NOT; }
+"+"                     { return PLUS; }
+"-"                     { return MINUS; }
+"*"                     { return TIMES; }
+"/"                     { return DIVIDE; }
+"="                     { return ASSIGN; }
 
-[ \t\r\n]+      ; // ignorer les espaces
+[0-9]+                  { yylval.ival = atoi(yytext); return NUMBER; }
+[a-zA-Z_][a-zA-Z0-9_]*  { yylval.str  = strdup(yytext); return IDENTIFIER; }
 
-.               { printf("Caractère inconnu : %s\n", yytext); }
+[ \t\r\n]+              ;               /* espaces = ignorés         */
+.                       { printf("Caractère inconnu : %s\n", yytext); }
 
 %%

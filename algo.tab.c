@@ -75,69 +75,68 @@
 
 #define MAX_ALGOS 100
 #define MAX_PARAMS 10
+#define MAX_VARS 100
+
+typedef enum { ISET, IRETURN, ICALL } InstrType;
+typedef enum { E_CONST, E_VAR, E_ADD, E_SUB, E_MUL, E_DIV } ExprType;
+
+typedef struct ExprNode {
+    ExprType type;
+    int value;               // pour E_CONST
+    char *var_name;          // pour E_VAR
+    struct ExprNode *left;   // pour opérateurs binaires
+    struct ExprNode *right;
+} ExprNode;
+
+typedef struct ArgNode {
+    int value;
+    struct ArgNode *next;
+} ArgNode;
 
 typedef struct Instruction {
-    char* code; // Placeholder pour l'instant
-    struct Instruction* next;
+    InstrType type;
+    char *var_name;              // pour ISET
+    ExprNode *expr;              // pour ISET ou IRETURN
+    char *call_name;             // pour ICALL
+    ArgNode *args;
+    struct Instruction *next;
 } Instruction;
 
 typedef struct {
-    char* name;
-    char* params[MAX_PARAMS];
+    char *name;
+    char *params[MAX_PARAMS];
     int param_count;
-    Instruction* instructions;
+    Instruction *instructions;
 } Algo;
+
+typedef struct {
+    char *name;
+    int value;
+} Variable;
 
 Algo algo_table[MAX_ALGOS];
 int algo_count = 0;
 
-char* param_list[MAX_PARAMS];
+char *param_list[MAX_PARAMS];
 int param_index = 0;
 
-int yylex();
-void yyerror(const char *s);
-
-typedef struct {
-    char* name;
-    int value;
-} Variable;
-
-typedef struct ArgNode {
-    int value;
-    struct ArgNode* next;
-} ArgNode;
-
-ArgNode* new_arg_list(int val) {
-    ArgNode* node = malloc(sizeof(ArgNode));
-    node->value = val;
-    node->next = NULL;
-    return node;
-}
-
-ArgNode* append_arg(ArgNode* list, int val) {
-    ArgNode* node = new_arg_list(val);
-    ArgNode* temp = list;
-    while (temp->next) temp = temp->next;
-    temp->next = node;
-    return list;
-}
-
-#define MAX_VARS 100
 Variable vars[MAX_VARS];
 int var_count = 0;
 
-int get_var(const char* name) {
-    for (int i = 0; i < var_count; i++) {
-        if (strcmp(vars[i].name, name) == 0)
+int yylex(void);
+void yyerror(const char *s);
+
+int get_var(const char *name) {
+    for (int i = 0; i < var_count; i++)
+        if (!strcmp(vars[i].name, name))
             return vars[i].value;
-    }
-    printf("Variable inconnue : %s\n", name);
+    fprintf(stderr, "Variable inconnue : %s\n", name);
     exit(1);
 }
 
-void set_var(const char* name, int val) {
+void set_var(const char *name, int val) {
     for (int i = 0; i < var_count; i++) {
-        if (strcmp(vars[i].name, name) == 0) {
+        if (!strcmp(vars[i].name, name)) {
             vars[i].value = val;
             return;
         }
@@ -147,17 +146,95 @@ void set_var(const char* name, int val) {
     var_count++;
 }
 
-int call_function(char* name, ArgNode* args) {
-    printf("CALL à %s avec args : ", name);
-    while (args) {
-        printf("%d ", args->value);
-        args = args->next;
+ArgNode* new_arg(int v) {
+    ArgNode* n = malloc(sizeof(*n));
+    n->value = v;
+    n->next = NULL;
+    return n;
+}
+
+ArgNode* add_arg(ArgNode* l, int v) {
+    ArgNode* n = new_arg(v);
+    if (!l) return n;
+    ArgNode* t = l;
+    while (t->next) t = t->next;
+    t->next = n;
+    return l;
+}
+
+int eval_expr(ExprNode *e) {
+    switch (e->type) {
+        case E_CONST: return e->value;
+        case E_VAR: return get_var(e->var_name);
+        case E_ADD: return eval_expr(e->left) + eval_expr(e->right);
+        case E_SUB: return eval_expr(e->left) - eval_expr(e->right);
+        case E_MUL: return eval_expr(e->left) * eval_expr(e->right);
+        case E_DIV: return eval_expr(e->left) / eval_expr(e->right);
     }
-    printf("\n");
     return 0;
 }
 
-#line 161 "algo.tab.c"
+void exec_instructions(Instruction *instr);
+
+int call_function(char* name, ArgNode* args) {
+    Algo* target = NULL;
+    for (int i = 0; i < algo_count; i++) {
+        if (strcmp(algo_table[i].name, name) == 0) {
+            target = &algo_table[i];
+            break;
+        }
+    }
+
+    if (!target) {
+        printf("Erreur : fonction %s inconnue\n", name);
+        exit(1);
+    }
+
+    ArgNode* current = args;
+    for (int i = 0; i < target->param_count; i++) {
+        if (!current) {
+            printf("Erreur : trop peu d’arguments pour %s\n", name);
+            exit(1);
+        }
+        set_var(target->params[i], current->value);
+        current = current->next;
+    }
+
+    if (current) {
+        printf("Erreur : trop d’arguments pour %s\n", name);
+        exit(1);
+    }
+
+    printf("CALL → %s(", name);
+    for (int i = 0; i < target->param_count; i++) {
+        printf("%d", get_var(target->params[i]));
+        if (i < target->param_count - 1) printf(",");
+    }
+    printf(")\n");
+
+    exec_instructions(target->instructions);
+
+    return 0;
+}
+
+void exec_instructions(Instruction *instr) {
+    while (instr) {
+        switch (instr->type) {
+            case ISET:
+                set_var(instr->var_name, eval_expr(instr->expr));
+                break;
+            case IRETURN:
+                printf("%d\n", eval_expr(instr->expr));
+                exit(0);
+            case ICALL:
+                call_function(instr->call_name, instr->args);
+                break;
+        }
+        instr = instr->next;
+    }
+}
+
+#line 238 "algo.tab.c"
 
 # ifndef YY_CAST
 #  ifdef __cplusplus
@@ -196,30 +273,30 @@ enum yysymbol_kind_t
   YYSYMBOL_TELSE = 8,                      /* TELSE  */
   YYSYMBOL_TDOWHILE = 9,                   /* TDOWHILE  */
   YYSYMBOL_TDOFORI = 10,                   /* TDOFORI  */
-  YYSYMBOL_TCALL = 11,                     /* TCALL  */
-  YYSYMBOL_TBEGINALGO = 12,                /* TBEGINALGO  */
-  YYSYMBOL_TENDALGO = 13,                  /* TENDALGO  */
-  YYSYMBOL_PLUS = 14,                      /* PLUS  */
-  YYSYMBOL_MINUS = 15,                     /* MINUS  */
-  YYSYMBOL_TIMES = 16,                     /* TIMES  */
-  YYSYMBOL_DIVIDE = 17,                    /* DIVIDE  */
-  YYSYMBOL_ASSIGN = 18,                    /* ASSIGN  */
-  YYSYMBOL_EQ = 19,                        /* EQ  */
-  YYSYMBOL_NEQ = 20,                       /* NEQ  */
-  YYSYMBOL_LE = 21,                        /* LE  */
-  YYSYMBOL_GE = 22,                        /* GE  */
-  YYSYMBOL_LT = 23,                        /* LT  */
-  YYSYMBOL_GT = 24,                        /* GT  */
-  YYSYMBOL_AND = 25,                       /* AND  */
-  YYSYMBOL_OR = 26,                        /* OR  */
-  YYSYMBOL_NOT = 27,                       /* NOT  */
-  YYSYMBOL_LBRACE = 28,                    /* LBRACE  */
-  YYSYMBOL_RBRACE = 29,                    /* RBRACE  */
-  YYSYMBOL_COMMA = 30,                     /* COMMA  */
-  YYSYMBOL_LPAREN = 31,                    /* LPAREN  */
-  YYSYMBOL_RPAREN = 32,                    /* RPAREN  */
-  YYSYMBOL_YYACCEPT = 33,                  /* $accept  */
-  YYSYMBOL_programme = 34,                 /* programme  */
+  YYSYMBOL_TOD = 11,                       /* TOD  */
+  YYSYMBOL_TCALL = 12,                     /* TCALL  */
+  YYSYMBOL_TBEGINALGO = 13,                /* TBEGINALGO  */
+  YYSYMBOL_TENDALGO = 14,                  /* TENDALGO  */
+  YYSYMBOL_PLUS = 15,                      /* PLUS  */
+  YYSYMBOL_MINUS = 16,                     /* MINUS  */
+  YYSYMBOL_TIMES = 17,                     /* TIMES  */
+  YYSYMBOL_DIVIDE = 18,                    /* DIVIDE  */
+  YYSYMBOL_ASSIGN = 19,                    /* ASSIGN  */
+  YYSYMBOL_EQ = 20,                        /* EQ  */
+  YYSYMBOL_NEQ = 21,                       /* NEQ  */
+  YYSYMBOL_LE = 22,                        /* LE  */
+  YYSYMBOL_GE = 23,                        /* GE  */
+  YYSYMBOL_LT = 24,                        /* LT  */
+  YYSYMBOL_GT = 25,                        /* GT  */
+  YYSYMBOL_AND = 26,                       /* AND  */
+  YYSYMBOL_OR = 27,                        /* OR  */
+  YYSYMBOL_NOT = 28,                       /* NOT  */
+  YYSYMBOL_LBRACE = 29,                    /* LBRACE  */
+  YYSYMBOL_RBRACE = 30,                    /* RBRACE  */
+  YYSYMBOL_COMMA = 31,                     /* COMMA  */
+  YYSYMBOL_YYACCEPT = 32,                  /* $accept  */
+  YYSYMBOL_programme = 33,                 /* programme  */
+  YYSYMBOL_call_stmt = 34,                 /* call_stmt  */
   YYSYMBOL_algos = 35,                     /* algos  */
   YYSYMBOL_algo = 36,                      /* algo  */
   YYSYMBOL_params = 37,                    /* params  */
@@ -554,19 +631,19 @@ union yyalloc
 /* YYFINAL -- State number of the termination state.  */
 #define YYFINAL  6
 /* YYLAST -- Last index in YYTABLE.  */
-#define YYLAST   44
+#define YYLAST   58
 
 /* YYNTOKENS -- Number of terminals.  */
-#define YYNTOKENS  33
+#define YYNTOKENS  32
 /* YYNNTS -- Number of nonterminals.  */
-#define YYNNTS  9
+#define YYNNTS  10
 /* YYNRULES -- Number of rules.  */
-#define YYNRULES  22
+#define YYNRULES  23
 /* YYNSTATES -- Number of states.  */
-#define YYNSTATES  49
+#define YYNSTATES  56
 
 /* YYMAXUTOK -- Last valid token kind.  */
-#define YYMAXUTOK   287
+#define YYMAXUTOK   286
 
 
 /* YYTRANSLATE(TOKEN-NUM) -- Symbol number corresponding to TOKEN-NUM
@@ -608,16 +685,16 @@ static const yytype_int8 yytranslate[] =
        2,     2,     2,     2,     2,     2,     1,     2,     3,     4,
        5,     6,     7,     8,     9,    10,    11,    12,    13,    14,
       15,    16,    17,    18,    19,    20,    21,    22,    23,    24,
-      25,    26,    27,    28,    29,    30,    31,    32
+      25,    26,    27,    28,    29,    30,    31
 };
 
 #if YYDEBUG
 /* YYRLINE[YYN] -- Source line where rule number YYN was defined.  */
-static const yytype_uint8 yyrline[] =
+static const yytype_int16 yyrline[] =
 {
-       0,   112,   112,   118,   119,   123,   138,   139,   140,   144,
-     145,   149,   150,   151,   155,   156,   157,   161,   162,   163,
-     164,   165,   166
+       0,   194,   194,   198,   204,   205,   209,   223,   224,   225,
+     229,   230,   239,   247,   254,   265,   266,   267,   271,   277,
+     283,   290,   297,   304
 };
 #endif
 
@@ -634,11 +711,11 @@ static const char *yysymbol_name (yysymbol_kind_t yysymbol) YY_ATTRIBUTE_UNUSED;
 static const char *const yytname[] =
 {
   "\"end of file\"", "error", "\"invalid token\"", "IDENTIFIER", "NUMBER",
-  "TSET", "TRETURN", "TIF", "TELSE", "TDOWHILE", "TDOFORI", "TCALL",
+  "TSET", "TRETURN", "TIF", "TELSE", "TDOWHILE", "TDOFORI", "TOD", "TCALL",
   "TBEGINALGO", "TENDALGO", "PLUS", "MINUS", "TIMES", "DIVIDE", "ASSIGN",
   "EQ", "NEQ", "LE", "GE", "LT", "GT", "AND", "OR", "NOT", "LBRACE",
-  "RBRACE", "COMMA", "LPAREN", "RPAREN", "$accept", "programme", "algos",
-  "algo", "params", "bloc", "instruction", "args", "expression", YY_NULLPTR
+  "RBRACE", "COMMA", "$accept", "programme", "call_stmt", "algos", "algo",
+  "params", "bloc", "instruction", "args", "expression", YY_NULLPTR
 };
 
 static const char *
@@ -648,7 +725,7 @@ yysymbol_name (yysymbol_kind_t yysymbol)
 }
 #endif
 
-#define YYPACT_NINF (-25)
+#define YYPACT_NINF (-31)
 
 #define yypact_value_is_default(Yyn) \
   ((Yyn) == YYPACT_NINF)
@@ -662,11 +739,12 @@ yysymbol_name (yysymbol_kind_t yysymbol)
    STATE-NUM.  */
 static const yytype_int8 yypact[] =
 {
-      -9,    10,    26,     0,   -25,     2,   -25,     4,   -25,    25,
-      31,   -25,   -24,     6,    33,    -1,     9,   -25,    35,    16,
-      36,    -4,   -25,    16,    22,   -25,   -25,     8,    11,   -25,
-     -25,     1,     8,    16,    16,    16,    16,    16,    16,   -25,
-      16,     8,     8,     8,     8,     8,    -3,     8,   -25
+       2,    17,    24,     6,   -31,   -25,   -31,    30,   -31,   -31,
+      15,    16,    38,    18,   -31,     5,    34,    22,    42,   -31,
+     -31,     9,    14,    19,    20,    47,    11,   -31,   -31,   -31,
+      34,    34,    34,    34,    34,    48,    34,    23,   -31,   -31,
+      14,    14,    14,    14,    14,    25,    -8,    27,    28,   -31,
+      34,    34,    12,    -4,   -31,   -31
 };
 
 /* YYDEFACT[STATE-NUM] -- Default reduction number in state STATE-NUM.
@@ -674,23 +752,24 @@ static const yytype_int8 yypact[] =
    means the default is an error.  */
 static const yytype_int8 yydefact[] =
 {
-       0,     0,     0,     0,     3,     0,     1,     0,     4,     6,
-       0,     7,     0,     0,     0,     0,     0,     8,     0,     0,
-       0,     0,     9,    14,     0,    22,    21,    12,     0,     5,
-      10,     0,    15,     0,     0,     0,     0,     0,    14,     2,
-       0,    11,    17,    18,    19,    20,     0,    16,    13
+       0,     0,     0,     0,     4,     0,     1,     0,     2,     5,
+       0,     0,     7,     0,     8,     0,    15,     0,     0,    19,
+      18,     0,    16,     0,     0,     0,     0,    10,     9,     3,
+       0,     0,     0,     0,     0,     0,     0,     0,     6,    11,
+      17,    20,    21,    22,    23,     0,     0,     0,     0,    13,
+      15,     0,     0,     0,    14,    12
 };
 
 /* YYPGOTO[NTERM-NUM].  */
 static const yytype_int8 yypgoto[] =
 {
-     -25,   -25,   -25,    38,   -25,   -25,    23,     5,   -19
+     -31,   -31,   -31,   -31,    49,   -31,   -31,    32,     4,   -30
 };
 
 /* YYDEFGOTO[NTERM-NUM].  */
 static const yytype_int8 yydefgoto[] =
 {
-       0,     2,     3,     4,    12,    21,    22,    31,    32
+       0,     2,     8,     3,     4,    15,    26,    27,    21,    22
 };
 
 /* YYTABLE[YYPACT[STATE-NUM]] -- What to do in state STATE-NUM.  If
@@ -698,47 +777,50 @@ static const yytype_int8 yydefgoto[] =
    number is the opposite.  If YYTABLE_NINF, syntax error.  */
 static const yytype_int8 yytable[] =
 {
-      27,    18,    19,     1,    18,    19,    14,    20,    15,    29,
-      20,     7,     1,     5,    41,    42,    43,    44,    45,    25,
-      26,    47,    34,    35,    36,    37,     6,    40,    11,    48,
-      39,    40,    10,     9,    13,    16,    17,    23,    24,    28,
-      33,     8,    38,    46,    30
+      40,    41,    42,    43,    44,    10,    46,    31,    32,    33,
+      34,    31,    32,    33,    34,     1,    23,    24,     7,     1,
+       5,    53,    49,    25,     6,    38,    55,    23,    24,    31,
+      32,    33,    34,    11,    25,    17,    18,    19,    20,    29,
+      30,    14,    54,    30,    12,    28,    13,    16,    35,    36,
+      37,    45,     9,    47,    52,    48,    50,    51,    39
 };
 
 static const yytype_int8 yycheck[] =
 {
-      19,     5,     6,    12,     5,     6,    30,    11,    32,    13,
-      11,    11,    12,     3,    33,    34,    35,    36,    37,     3,
-       4,    40,    14,    15,    16,    17,     0,    30,     3,    32,
-      29,    30,    28,    31,     3,    29,     3,    28,     3,     3,
-      18,     3,    31,    38,    21
+      30,    31,    32,    33,    34,    30,    36,    15,    16,    17,
+      18,    15,    16,    17,    18,    13,     5,     6,    12,    13,
+       3,    51,    30,    12,     0,    14,    30,     5,     6,    15,
+      16,    17,    18,     3,    12,    30,    31,     3,     4,    30,
+      31,     3,    30,    31,    29,     3,    30,    29,    29,    29,
+       3,     3,     3,    30,    50,    30,    29,    29,    26
 };
 
 /* YYSTOS[STATE-NUM] -- The symbol kind of the accessing symbol of
    state STATE-NUM.  */
 static const yytype_int8 yystos[] =
 {
-       0,    12,    34,    35,    36,     3,     0,    11,    36,    31,
-      28,     3,    37,     3,    30,    32,    29,     3,     5,     6,
-      11,    38,    39,    28,     3,     3,     4,    41,     3,    13,
-      39,    40,    41,    18,    14,    15,    16,    17,    31,    29,
-      30,    41,    41,    41,    41,    41,    40,    41,    32
+       0,    13,    33,    35,    36,     3,     0,    12,    34,    36,
+      30,     3,    29,    30,     3,    37,    29,    30,    31,     3,
+       4,    40,    41,     5,     6,    12,    38,    39,     3,    30,
+      31,    15,    16,    17,    18,    29,    29,     3,    14,    39,
+      41,    41,    41,    41,    41,     3,    41,    30,    30,    30,
+      29,    29,    40,    41,    30,    30
 };
 
 /* YYR1[RULE-NUM] -- Symbol kind of the left-hand side of rule RULE-NUM.  */
 static const yytype_int8 yyr1[] =
 {
-       0,    33,    34,    35,    35,    36,    37,    37,    37,    38,
-      38,    39,    39,    39,    40,    40,    40,    41,    41,    41,
-      41,    41,    41
+       0,    32,    33,    34,    35,    35,    36,    37,    37,    37,
+      38,    38,    39,    39,    39,    40,    40,    40,    41,    41,
+      41,    41,    41,    41
 };
 
 /* YYR2[RULE-NUM] -- Number of symbols on the right-hand side of rule RULE-NUM.  */
 static const yytype_int8 yyr2[] =
 {
-       0,     2,     8,     1,     2,     7,     0,     1,     3,     1,
-       2,     4,     2,     5,     0,     1,     3,     3,     3,     3,
-       3,     1,     1
+       0,     2,     2,     6,     1,     2,     8,     0,     1,     3,
+       1,     2,     7,     4,     6,     0,     1,     3,     1,     1,
+       3,     3,     3,     3
 };
 
 
@@ -1201,122 +1283,193 @@ yyreduce:
   YY_REDUCE_PRINT (yyn);
   switch (yyn)
     {
-  case 2: /* programme: algos TCALL LBRACE IDENTIFIER RBRACE LBRACE args RBRACE  */
-#line 112 "algo.y"
-                                                            {
+  case 3: /* call_stmt: TCALL IDENTIFIER RBRACE LBRACE args RBRACE  */
+#line 198 "algo.y"
+                                               {
         call_function((yyvsp[-4].str), (yyvsp[-1].arglist));
     }
-#line 1210 "algo.tab.c"
+#line 1292 "algo.tab.c"
     break;
 
-  case 5: /* algo: TBEGINALGO IDENTIFIER LPAREN params RPAREN bloc TENDALGO  */
-#line 124 "algo.y"
-    {
-        algo_table[algo_count].name = strdup((yyvsp[-5].str));
+  case 6: /* algo: TBEGINALGO IDENTIFIER RBRACE LBRACE params RBRACE bloc TENDALGO  */
+#line 209 "algo.y"
+                                                                    {
+        algo_table[algo_count].name = strdup((yyvsp[-6].str));
         algo_table[algo_count].param_count = param_index;
         for (int i = 0; i < param_index; i++) {
             algo_table[algo_count].params[i] = strdup(param_list[i]);
         }
-        algo_table[algo_count].instructions = NULL; // à implémenter à l'étape suivante
-        printf("Algo stocké : %s avec %d paramètre(s)\n", (yyvsp[-5].str), param_index);
+        algo_table[algo_count].instructions = (yyvsp[-1].instr);
+        printf("Algo stocké : %s (%d param)\n", (yyvsp[-6].str), param_index);
         algo_count++;
         param_index = 0;
     }
-#line 1226 "algo.tab.c"
+#line 1308 "algo.tab.c"
     break;
 
-  case 6: /* params: %empty  */
-#line 138 "algo.y"
-                                     { param_index = 0; }
-#line 1232 "algo.tab.c"
+  case 7: /* params: %empty  */
+#line 223 "algo.y"
+                                 { param_index = 0; }
+#line 1314 "algo.tab.c"
     break;
 
-  case 7: /* params: IDENTIFIER  */
-#line 139 "algo.y"
-                                    { param_list[param_index++] = strdup((yyvsp[0].str)); }
-#line 1238 "algo.tab.c"
-    break;
-
-  case 8: /* params: params COMMA IDENTIFIER  */
-#line 140 "algo.y"
-                                    { param_list[param_index++] = strdup((yyvsp[0].str)); }
-#line 1244 "algo.tab.c"
-    break;
-
-  case 11: /* instruction: TSET IDENTIFIER ASSIGN expression  */
-#line 149 "algo.y"
-                                                  { set_var((yyvsp[-2].str), (yyvsp[0].ival)); }
-#line 1250 "algo.tab.c"
-    break;
-
-  case 12: /* instruction: TRETURN expression  */
-#line 150 "algo.y"
-                                                  { printf("%d\n", (yyvsp[0].ival)); exit(0); }
-#line 1256 "algo.tab.c"
-    break;
-
-  case 13: /* instruction: TCALL IDENTIFIER LPAREN args RPAREN  */
-#line 151 "algo.y"
-                                                  { call_function((yyvsp[-3].str), (yyvsp[-1].arglist)); }
-#line 1262 "algo.tab.c"
-    break;
-
-  case 14: /* args: %empty  */
-#line 155 "algo.y"
-                                 { (yyval.arglist) = NULL; }
-#line 1268 "algo.tab.c"
-    break;
-
-  case 15: /* args: expression  */
-#line 156 "algo.y"
-                                { (yyval.arglist) = new_arg_list((yyvsp[0].ival)); }
-#line 1274 "algo.tab.c"
-    break;
-
-  case 16: /* args: args COMMA expression  */
-#line 157 "algo.y"
-                                { (yyval.arglist) = append_arg((yyvsp[-2].arglist), (yyvsp[0].ival)); }
-#line 1280 "algo.tab.c"
-    break;
-
-  case 17: /* expression: expression PLUS expression  */
-#line 161 "algo.y"
-                                                  { (yyval.ival) = (yyvsp[-2].ival) + (yyvsp[0].ival); }
-#line 1286 "algo.tab.c"
-    break;
-
-  case 18: /* expression: expression MINUS expression  */
-#line 162 "algo.y"
-                                                  { (yyval.ival) = (yyvsp[-2].ival) - (yyvsp[0].ival); }
-#line 1292 "algo.tab.c"
-    break;
-
-  case 19: /* expression: expression TIMES expression  */
-#line 163 "algo.y"
-                                                  { (yyval.ival) = (yyvsp[-2].ival) * (yyvsp[0].ival); }
-#line 1298 "algo.tab.c"
-    break;
-
-  case 20: /* expression: expression DIVIDE expression  */
-#line 164 "algo.y"
-                                                  { (yyval.ival) = (yyvsp[-2].ival) / (yyvsp[0].ival); }
-#line 1304 "algo.tab.c"
-    break;
-
-  case 21: /* expression: NUMBER  */
-#line 165 "algo.y"
-                                                  { (yyval.ival) = (yyvsp[0].ival); }
-#line 1310 "algo.tab.c"
-    break;
-
-  case 22: /* expression: IDENTIFIER  */
-#line 166 "algo.y"
-                                                  { (yyval.ival) = get_var((yyvsp[0].str)); }
-#line 1316 "algo.tab.c"
-    break;
-
-
+  case 8: /* params: IDENTIFIER  */
+#line 224 "algo.y"
+                                { param_list[param_index++] = strdup((yyvsp[0].str)); }
 #line 1320 "algo.tab.c"
+    break;
+
+  case 9: /* params: params COMMA IDENTIFIER  */
+#line 225 "algo.y"
+                                { param_list[param_index++] = strdup((yyvsp[0].str)); }
+#line 1326 "algo.tab.c"
+    break;
+
+  case 10: /* bloc: instruction  */
+#line 229 "algo.y"
+                                { (yyval.instr) = (yyvsp[0].instr); }
+#line 1332 "algo.tab.c"
+    break;
+
+  case 11: /* bloc: bloc instruction  */
+#line 230 "algo.y"
+                                {
+        Instruction *last = (yyvsp[-1].instr);
+        while (last->next) last = last->next;
+        last->next = (yyvsp[0].instr);
+        (yyval.instr) = (yyvsp[-1].instr);
+    }
+#line 1343 "algo.tab.c"
+    break;
+
+  case 12: /* instruction: TSET LBRACE IDENTIFIER RBRACE LBRACE expression RBRACE  */
+#line 239 "algo.y"
+                                                           {
+        Instruction *i = malloc(sizeof(*i));
+        i->type = ISET;
+        i->var_name = strdup((yyvsp[-4].str));
+        i->expr = (yyvsp[-1].expr);
+        i->next = NULL;
+        (yyval.instr) = i;
+    }
+#line 1356 "algo.tab.c"
+    break;
+
+  case 13: /* instruction: TRETURN LBRACE expression RBRACE  */
+#line 247 "algo.y"
+                                       {
+        Instruction *i = malloc(sizeof(*i));
+        i->type = IRETURN;
+        i->expr = (yyvsp[-1].expr);
+        i->next = NULL;
+        (yyval.instr) = i;
+    }
+#line 1368 "algo.tab.c"
+    break;
+
+  case 14: /* instruction: TCALL IDENTIFIER RBRACE LBRACE args RBRACE  */
+#line 254 "algo.y"
+                                                 {
+        Instruction *i = malloc(sizeof(*i));
+        i->type = ICALL;
+        i->call_name = strdup((yyvsp[-4].str));
+        i->args = (yyvsp[-1].arglist);
+        i->next = NULL;
+        (yyval.instr) = i;
+    }
+#line 1381 "algo.tab.c"
+    break;
+
+  case 15: /* args: %empty  */
+#line 265 "algo.y"
+                                { (yyval.arglist) = NULL; }
+#line 1387 "algo.tab.c"
+    break;
+
+  case 16: /* args: expression  */
+#line 266 "algo.y"
+                               { (yyval.arglist) = new_arg(eval_expr((yyvsp[0].expr))); }
+#line 1393 "algo.tab.c"
+    break;
+
+  case 17: /* args: args COMMA expression  */
+#line 267 "algo.y"
+                               { (yyval.arglist) = add_arg((yyvsp[-2].arglist), eval_expr((yyvsp[0].expr))); }
+#line 1399 "algo.tab.c"
+    break;
+
+  case 18: /* expression: NUMBER  */
+#line 271 "algo.y"
+           {
+        ExprNode *e = malloc(sizeof(*e));
+        e->type = E_CONST;
+        e->value = (yyvsp[0].ival);
+        (yyval.expr) = e;
+    }
+#line 1410 "algo.tab.c"
+    break;
+
+  case 19: /* expression: IDENTIFIER  */
+#line 277 "algo.y"
+                 {
+        ExprNode *e = malloc(sizeof(*e));
+        e->type = E_VAR;
+        e->var_name = strdup((yyvsp[0].str));
+        (yyval.expr) = e;
+    }
+#line 1421 "algo.tab.c"
+    break;
+
+  case 20: /* expression: expression PLUS expression  */
+#line 283 "algo.y"
+                                 {
+        ExprNode *e = malloc(sizeof(*e));
+        e->type = E_ADD;
+        e->left = (yyvsp[-2].expr);
+        e->right = (yyvsp[0].expr);
+        (yyval.expr) = e;
+    }
+#line 1433 "algo.tab.c"
+    break;
+
+  case 21: /* expression: expression MINUS expression  */
+#line 290 "algo.y"
+                                  {
+        ExprNode *e = malloc(sizeof(*e));
+        e->type = E_SUB;
+        e->left = (yyvsp[-2].expr);
+        e->right = (yyvsp[0].expr);
+        (yyval.expr) = e;
+    }
+#line 1445 "algo.tab.c"
+    break;
+
+  case 22: /* expression: expression TIMES expression  */
+#line 297 "algo.y"
+                                  {
+        ExprNode *e = malloc(sizeof(*e));
+        e->type = E_MUL;
+        e->left = (yyvsp[-2].expr);
+        e->right = (yyvsp[0].expr);
+        (yyval.expr) = e;
+    }
+#line 1457 "algo.tab.c"
+    break;
+
+  case 23: /* expression: expression DIVIDE expression  */
+#line 304 "algo.y"
+                                   {
+        ExprNode *e = malloc(sizeof(*e));
+        e->type = E_DIV;
+        e->left = (yyvsp[-2].expr);
+        e->right = (yyvsp[0].expr);
+        (yyval.expr) = e;
+    }
+#line 1469 "algo.tab.c"
+    break;
+
+
+#line 1473 "algo.tab.c"
 
       default: break;
     }
@@ -1509,13 +1662,13 @@ yyreturnlab:
   return yyresult;
 }
 
-#line 169 "algo.y"
+#line 313 "algo.y"
 
 
 void yyerror(const char *s) {
-    fprintf(stderr, "Erreur de parsing : %s\n", s);
+    fprintf(stderr, "Erreur : %s\n", s);
 }
 
-int main() {
+int main(void) {
     return yyparse();
 }

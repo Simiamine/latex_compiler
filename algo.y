@@ -5,69 +5,68 @@
 
 #define MAX_ALGOS 100
 #define MAX_PARAMS 10
+#define MAX_VARS 100
+
+typedef enum { ISET, IRETURN, ICALL } InstrType;
+typedef enum { E_CONST, E_VAR, E_ADD, E_SUB, E_MUL, E_DIV } ExprType;
+
+typedef struct ExprNode {
+    ExprType type;
+    int value;               // pour E_CONST
+    char *var_name;          // pour E_VAR
+    struct ExprNode *left;   // pour opérateurs binaires
+    struct ExprNode *right;
+} ExprNode;
+
+typedef struct ArgNode {
+    int value;
+    struct ArgNode *next;
+} ArgNode;
 
 typedef struct Instruction {
-    char* code; // Placeholder pour l'instant
-    struct Instruction* next;
+    InstrType type;
+    char *var_name;              // pour ISET
+    ExprNode *expr;              // pour ISET ou IRETURN
+    char *call_name;             // pour ICALL
+    ArgNode *args;
+    struct Instruction *next;
 } Instruction;
 
 typedef struct {
-    char* name;
-    char* params[MAX_PARAMS];
+    char *name;
+    char *params[MAX_PARAMS];
     int param_count;
-    Instruction* instructions;
+    Instruction *instructions;
 } Algo;
+
+typedef struct {
+    char *name;
+    int value;
+} Variable;
 
 Algo algo_table[MAX_ALGOS];
 int algo_count = 0;
 
-char* param_list[MAX_PARAMS];
+char *param_list[MAX_PARAMS];
 int param_index = 0;
 
-int yylex();
-void yyerror(const char *s);
-
-typedef struct {
-    char* name;
-    int value;
-} Variable;
-
-typedef struct ArgNode {
-    int value;
-    struct ArgNode* next;
-} ArgNode;
-
-ArgNode* new_arg_list(int val) {
-    ArgNode* node = malloc(sizeof(ArgNode));
-    node->value = val;
-    node->next = NULL;
-    return node;
-}
-
-ArgNode* append_arg(ArgNode* list, int val) {
-    ArgNode* node = new_arg_list(val);
-    ArgNode* temp = list;
-    while (temp->next) temp = temp->next;
-    temp->next = node;
-    return list;
-}
-
-#define MAX_VARS 100
 Variable vars[MAX_VARS];
 int var_count = 0;
 
-int get_var(const char* name) {
-    for (int i = 0; i < var_count; i++) {
-        if (strcmp(vars[i].name, name) == 0)
+int yylex(void);
+void yyerror(const char *s);
+
+int get_var(const char *name) {
+    for (int i = 0; i < var_count; i++)
+        if (!strcmp(vars[i].name, name))
             return vars[i].value;
-    }
-    printf("Variable inconnue : %s\n", name);
+    fprintf(stderr, "Variable inconnue : %s\n", name);
     exit(1);
 }
 
-void set_var(const char* name, int val) {
+void set_var(const char *name, int val) {
     for (int i = 0; i < var_count; i++) {
-        if (strcmp(vars[i].name, name) == 0) {
+        if (!strcmp(vars[i].name, name)) {
             vars[i].value = val;
             return;
         }
@@ -77,14 +76,92 @@ void set_var(const char* name, int val) {
     var_count++;
 }
 
-int call_function(char* name, ArgNode* args) {
-    printf("CALL à %s avec args : ", name);
-    while (args) {
-        printf("%d ", args->value);
-        args = args->next;
+ArgNode* new_arg(int v) {
+    ArgNode* n = malloc(sizeof(*n));
+    n->value = v;
+    n->next = NULL;
+    return n;
+}
+
+ArgNode* add_arg(ArgNode* l, int v) {
+    ArgNode* n = new_arg(v);
+    if (!l) return n;
+    ArgNode* t = l;
+    while (t->next) t = t->next;
+    t->next = n;
+    return l;
+}
+
+int eval_expr(ExprNode *e) {
+    switch (e->type) {
+        case E_CONST: return e->value;
+        case E_VAR: return get_var(e->var_name);
+        case E_ADD: return eval_expr(e->left) + eval_expr(e->right);
+        case E_SUB: return eval_expr(e->left) - eval_expr(e->right);
+        case E_MUL: return eval_expr(e->left) * eval_expr(e->right);
+        case E_DIV: return eval_expr(e->left) / eval_expr(e->right);
     }
-    printf("\n");
     return 0;
+}
+
+void exec_instructions(Instruction *instr);
+
+int call_function(char* name, ArgNode* args) {
+    Algo* target = NULL;
+    for (int i = 0; i < algo_count; i++) {
+        if (strcmp(algo_table[i].name, name) == 0) {
+            target = &algo_table[i];
+            break;
+        }
+    }
+
+    if (!target) {
+        printf("Erreur : fonction %s inconnue\n", name);
+        exit(1);
+    }
+
+    ArgNode* current = args;
+    for (int i = 0; i < target->param_count; i++) {
+        if (!current) {
+            printf("Erreur : trop peu d’arguments pour %s\n", name);
+            exit(1);
+        }
+        set_var(target->params[i], current->value);
+        current = current->next;
+    }
+
+    if (current) {
+        printf("Erreur : trop d’arguments pour %s\n", name);
+        exit(1);
+    }
+
+    printf("CALL → %s(", name);
+    for (int i = 0; i < target->param_count; i++) {
+        printf("%d", get_var(target->params[i]));
+        if (i < target->param_count - 1) printf(",");
+    }
+    printf(")\n");
+
+    exec_instructions(target->instructions);
+
+    return 0;
+}
+
+void exec_instructions(Instruction *instr) {
+    while (instr) {
+        switch (instr->type) {
+            case ISET:
+                set_var(instr->var_name, eval_expr(instr->expr));
+                break;
+            case IRETURN:
+                printf("%d\n", eval_expr(instr->expr));
+                exit(0);
+            case ICALL:
+                call_function(instr->call_name, instr->args);
+                break;
+        }
+        instr = instr->next;
+    }
 }
 %}
 
@@ -92,86 +169,153 @@ int call_function(char* name, ArgNode* args) {
     int ival;
     char* str;
     struct ArgNode* arglist;
+    struct Instruction* instr;
+    struct ExprNode* expr;
 }
 
 %token <str> IDENTIFIER
 %token <ival> NUMBER
-%token TSET TRETURN TIF TELSE TDOWHILE TDOFORI TCALL TBEGINALGO TENDALGO
+%token TSET TRETURN TIF TELSE TDOWHILE TDOFORI TOD
+%token TCALL TBEGINALGO TENDALGO
 %token PLUS MINUS TIMES DIVIDE ASSIGN
 %token EQ NEQ LE GE LT GT AND OR NOT
-%token LBRACE RBRACE COMMA LPAREN RPAREN
+%token LBRACE RBRACE COMMA
 
-%type <ival> expression
+%type <ival> programme
 %type <arglist> args
+%type <instr> instruction bloc
+%type <expr> expression
 
 %start programme
 
 %%
 
 programme:
-    algos TCALL LBRACE IDENTIFIER RBRACE LBRACE args RBRACE {
-        call_function($4, $7);
+    algos call_stmt
+    ;
+
+call_stmt:
+    TCALL IDENTIFIER RBRACE LBRACE args RBRACE {
+        call_function($2, $5);
     }
     ;
 
 algos:
-      algo
+    algo
     | algos algo
     ;
 
 algo:
-    TBEGINALGO IDENTIFIER LPAREN params RPAREN bloc TENDALGO
-    {
+    TBEGINALGO IDENTIFIER RBRACE LBRACE params RBRACE bloc TENDALGO {
         algo_table[algo_count].name = strdup($2);
         algo_table[algo_count].param_count = param_index;
         for (int i = 0; i < param_index; i++) {
             algo_table[algo_count].params[i] = strdup(param_list[i]);
         }
-        algo_table[algo_count].instructions = NULL; // à implémenter à l'étape suivante
-        printf("Algo stocké : %s avec %d paramètre(s)\n", $2, param_index);
+        algo_table[algo_count].instructions = $7;
+        printf("Algo stocké : %s (%d param)\n", $2, param_index);
         algo_count++;
         param_index = 0;
     }
     ;
 
 params:
-      /* vide */                     { param_index = 0; }
-    | IDENTIFIER                    { param_list[param_index++] = strdup($1); }
-    | params COMMA IDENTIFIER       { param_list[param_index++] = strdup($3); }
+    /* vide */                   { param_index = 0; }
+    | IDENTIFIER                { param_list[param_index++] = strdup($1); }
+    | params COMMA IDENTIFIER   { param_list[param_index++] = strdup($3); }
     ;
 
 bloc:
-      instruction
-    | bloc instruction
+    instruction                 { $$ = $1; }
+    | bloc instruction          {
+        Instruction *last = $1;
+        while (last->next) last = last->next;
+        last->next = $2;
+        $$ = $1;
+    }
     ;
 
 instruction:
-      TSET IDENTIFIER ASSIGN expression           { set_var($2, $4); }
-    | TRETURN expression                          { printf("%d\n", $2); exit(0); }
-    | TCALL IDENTIFIER LPAREN args RPAREN         { call_function($2, $4); }
+    TSET LBRACE IDENTIFIER RBRACE LBRACE expression RBRACE {
+        Instruction *i = malloc(sizeof(*i));
+        i->type = ISET;
+        i->var_name = strdup($3);
+        i->expr = $6;
+        i->next = NULL;
+        $$ = i;
+    }
+    | TRETURN LBRACE expression RBRACE {
+        Instruction *i = malloc(sizeof(*i));
+        i->type = IRETURN;
+        i->expr = $3;
+        i->next = NULL;
+        $$ = i;
+    }
+    | TCALL IDENTIFIER RBRACE LBRACE args RBRACE {
+        Instruction *i = malloc(sizeof(*i));
+        i->type = ICALL;
+        i->call_name = strdup($2);
+        i->args = $5;
+        i->next = NULL;
+        $$ = i;
+    }
     ;
 
 args:
-      /* vide */                 { $$ = NULL; }
-    | expression                { $$ = new_arg_list($1); }
-    | args COMMA expression     { $$ = append_arg($1, $3); }
+    /* vide */                  { $$ = NULL; }
+    | expression               { $$ = new_arg(eval_expr($1)); }
+    | args COMMA expression    { $$ = add_arg($1, eval_expr($3)); }
     ;
 
 expression:
-      expression PLUS expression                  { $$ = $1 + $3; }
-    | expression MINUS expression                 { $$ = $1 - $3; }
-    | expression TIMES expression                 { $$ = $1 * $3; }
-    | expression DIVIDE expression                { $$ = $1 / $3; }
-    | NUMBER                                      { $$ = $1; }
-    | IDENTIFIER                                  { $$ = get_var($1); }
+    NUMBER {
+        ExprNode *e = malloc(sizeof(*e));
+        e->type = E_CONST;
+        e->value = $1;
+        $$ = e;
+    }
+    | IDENTIFIER {
+        ExprNode *e = malloc(sizeof(*e));
+        e->type = E_VAR;
+        e->var_name = strdup($1);
+        $$ = e;
+    }
+    | expression PLUS expression {
+        ExprNode *e = malloc(sizeof(*e));
+        e->type = E_ADD;
+        e->left = $1;
+        e->right = $3;
+        $$ = e;
+    }
+    | expression MINUS expression {
+        ExprNode *e = malloc(sizeof(*e));
+        e->type = E_SUB;
+        e->left = $1;
+        e->right = $3;
+        $$ = e;
+    }
+    | expression TIMES expression {
+        ExprNode *e = malloc(sizeof(*e));
+        e->type = E_MUL;
+        e->left = $1;
+        e->right = $3;
+        $$ = e;
+    }
+    | expression DIVIDE expression {
+        ExprNode *e = malloc(sizeof(*e));
+        e->type = E_DIV;
+        e->left = $1;
+        e->right = $3;
+        $$ = e;
+    }
     ;
 
 %%
 
 void yyerror(const char *s) {
-    fprintf(stderr, "Erreur de parsing : %s\n", s);
+    fprintf(stderr, "Erreur : %s\n", s);
 }
 
-int main() {
+int main(void) {
     return yyparse();
 }

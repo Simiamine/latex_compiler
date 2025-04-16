@@ -62,28 +62,27 @@ extern int yydebug;
     TELSE = 263,                   /* TELSE  */
     TDOWHILE = 264,                /* TDOWHILE  */
     TDOFORI = 265,                 /* TDOFORI  */
-    TCALL = 266,                   /* TCALL  */
-    TBEGINALGO = 267,              /* TBEGINALGO  */
-    TENDALGO = 268,                /* TENDALGO  */
-    PLUS = 269,                    /* PLUS  */
-    MINUS = 270,                   /* MINUS  */
-    TIMES = 271,                   /* TIMES  */
-    DIVIDE = 272,                  /* DIVIDE  */
-    ASSIGN = 273,                  /* ASSIGN  */
-    EQ = 274,                      /* EQ  */
-    NEQ = 275,                     /* NEQ  */
-    LE = 276,                      /* LE  */
-    GE = 277,                      /* GE  */
-    LT = 278,                      /* LT  */
-    GT = 279,                      /* GT  */
-    AND = 280,                     /* AND  */
-    OR = 281,                      /* OR  */
-    NOT = 282,                     /* NOT  */
-    LBRACE = 283,                  /* LBRACE  */
-    RBRACE = 284,                  /* RBRACE  */
-    COMMA = 285,                   /* COMMA  */
-    LPAREN = 286,                  /* LPAREN  */
-    RPAREN = 287                   /* RPAREN  */
+    TOD = 266,                     /* TOD  */
+    TCALL = 267,                   /* TCALL  */
+    TBEGINALGO = 268,              /* TBEGINALGO  */
+    TENDALGO = 269,                /* TENDALGO  */
+    PLUS = 270,                    /* PLUS  */
+    MINUS = 271,                   /* MINUS  */
+    TIMES = 272,                   /* TIMES  */
+    DIVIDE = 273,                  /* DIVIDE  */
+    ASSIGN = 274,                  /* ASSIGN  */
+    EQ = 275,                      /* EQ  */
+    NEQ = 276,                     /* NEQ  */
+    LE = 277,                      /* LE  */
+    GE = 278,                      /* GE  */
+    LT = 279,                      /* LT  */
+    GT = 280,                      /* GT  */
+    AND = 281,                     /* AND  */
+    OR = 282,                      /* OR  */
+    NOT = 283,                     /* NOT  */
+    LBRACE = 284,                  /* LBRACE  */
+    RBRACE = 285,                  /* RBRACE  */
+    COMMA = 286                    /* COMMA  */
   };
   typedef enum yytokentype yytoken_kind_t;
 #endif
@@ -92,13 +91,15 @@ extern int yydebug;
 #if ! defined YYSTYPE && ! defined YYSTYPE_IS_DECLARED
 union YYSTYPE
 {
-#line 91 "algo.y"
+#line 168 "algo.y"
 
     int ival;
     char* str;
     struct ArgNode* arglist;
+    struct Instruction* instr;
+    struct ExprNode* expr;
 
-#line 102 "algo.tab.h"
+#line 103 "algo.tab.h"
 
 };
 typedef union YYSTYPE YYSTYPE;
