@@ -10,6 +10,7 @@
 "\\RETURN"              { printf("[LEX] Token: \\RETURN\n"); return TRETURN; }
 "\\IF"                  { printf("[LEX] Token: \\IF\n"); return TIF; }
 "\\ELSE"                { printf("[LEX] Token: \\ELSE\n"); return TELSE; }
+"\\FI"                  { printf("[LEX] Token: \\FI\n"); return TFI; }
 "\\DOWHILE"             { printf("[LEX] Token: \\DOWHILE\n"); return TDOWHILE; }
 "\\DOFORI"              { printf("[LEX] Token: \\DOFORI\n"); return TDOFORI; }
 "\\OD"                  { printf("[LEX] Token: \\OD\n"); return TOD; }

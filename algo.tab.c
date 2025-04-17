@@ -77,21 +77,25 @@
 #define MAX_PARAMS 10
 #define MAX_VARS 100
 
-typedef enum { ISET, IRETURN, ICALL, IFOR } InstrType;
-typedef enum { E_CONST, E_VAR, E_ADD, E_SUB, E_MUL, E_DIV } ExprType;
+typedef struct ExprNode ExprNode;
 
-typedef struct ExprNode {
+typedef struct ArgNode {
+    ExprNode *expr;
+    struct ArgNode *next;
+} ArgNode;
+
+typedef enum { ISET, IRETURN, ICALL, IFOR, IIF } InstrType;
+typedef enum { E_CONST, E_VAR, E_ADD, E_SUB, E_MUL, E_DIV, E_EQ, E_CALL } ExprType;
+
+struct ExprNode {
     ExprType type;
     int value;
     char *var_name;
-    struct ExprNode *left;
-    struct ExprNode *right;
-} ExprNode;
-
-typedef struct ArgNode {
-    int value;
-    struct ArgNode *next;
-} ArgNode;
+    ExprNode *left;
+    ExprNode *right;
+    char *call_name;
+    ArgNode *args;
+};
 
 typedef struct Instruction {
     InstrType type;
@@ -104,6 +108,9 @@ typedef struct Instruction {
     ExprNode *from_expr;
     ExprNode *to_expr;
     struct Instruction *for_body;
+    ExprNode *cond;
+    struct Instruction *if_body;
+    struct Instruction *else_body;
 } Instruction;
 
 typedef struct {
@@ -127,6 +134,8 @@ int var_count = 0;
 
 int yylex(void);
 void yyerror(const char *s);
+int call_function(char* name, ArgNode* args);
+int exec_instructions(Instruction *instr);
 
 int get_var(const char *name) {
     for (int i = 0; i < var_count; i++)
@@ -148,15 +157,15 @@ void set_var(const char *name, int val) {
     var_count++;
 }
 
-ArgNode* new_arg(int v) {
+ArgNode* new_arg(ExprNode* e) {
     ArgNode* n = malloc(sizeof(*n));
-    n->value = v;
+    n->expr = e;
     n->next = NULL;
     return n;
 }
 
-ArgNode* add_arg(ArgNode* l, int v) {
-    ArgNode* n = new_arg(v);
+ArgNode* add_arg(ArgNode* l, ExprNode* e) {
+    ArgNode* n = new_arg(e);
     if (!l) return n;
     ArgNode* t = l;
     while (t->next) t = t->next;
@@ -172,11 +181,14 @@ int eval_expr(ExprNode *e) {
         case E_SUB: return eval_expr(e->left) - eval_expr(e->right);
         case E_MUL: return eval_expr(e->left) * eval_expr(e->right);
         case E_DIV: return eval_expr(e->left) / eval_expr(e->right);
+        case E_EQ: return eval_expr(e->left) == eval_expr(e->right);
+        case E_CALL: {
+            printf("[EVAL] eval CALL %s(...)\n", e->call_name);
+            return call_function(e->call_name, e->args);
+        }
     }
     return 0;
 }
-
-void exec_instructions(Instruction *instr);
 
 int call_function(char* name, ArgNode* args) {
     Algo* target = NULL;
@@ -188,47 +200,49 @@ int call_function(char* name, ArgNode* args) {
     }
 
     if (!target) {
-        printf("Erreur : fonction %s inconnue\n", name);
+        printf("[ERROR] fonction inconnue : %s\n", name);
         exit(1);
     }
 
     ArgNode* current = args;
     for (int i = 0; i < target->param_count; i++) {
         if (!current) {
-            printf("Erreur : trop peu d’arguments pour %s\n", name);
+            printf("[ERROR] pas assez d'arguments pour %s\n", name);
             exit(1);
         }
-        set_var(target->params[i], current->value);
+        int val = eval_expr(current->expr);
+        set_var(target->params[i], val);
         current = current->next;
     }
 
     if (current) {
-        printf("Erreur : trop d’arguments pour %s\n", name);
+        printf("[ERROR] trop d'arguments pour %s\n", name);
         exit(1);
     }
 
-    printf("CALL → %s(", name);
+    printf("[EXEC] CALL %s(", name);
     for (int i = 0; i < target->param_count; i++) {
         printf("%d", get_var(target->params[i]));
-        if (i < target->param_count - 1) printf(",");
+        if (i < target->param_count - 1) printf(", ");
     }
     printf(")\n");
 
-    exec_instructions(target->instructions);
-    return 0;
+    int result = exec_instructions(target->instructions);
+    return result;
 }
 
-void exec_instructions(Instruction *instr) {
+int exec_instructions(Instruction *instr) {
     while (instr) {
         switch (instr->type) {
             case ISET:
-                printf("[EXEC] SET %s = eval(expr)\n", instr->var_name);
+                printf("[EXEC] SET %s = ...\n", instr->var_name);
                 set_var(instr->var_name, eval_expr(instr->expr));
                 break;
-            case IRETURN:
-                printf("[EXEC] RETURN = ");
-                printf("%d\n", eval_expr(instr->expr));
-                exit(0);
+            case IRETURN: {
+                int ret = eval_expr(instr->expr);
+                printf("[EXEC] RETURN → %d\n", ret);
+                return ret;
+            }
             case ICALL:
                 printf("[EXEC] CALL %s(...)\n", instr->call_name);
                 call_function(instr->call_name, instr->args);
@@ -243,12 +257,23 @@ void exec_instructions(Instruction *instr) {
                 }
                 break;
             }
+            case IIF: {
+                int cond = eval_expr(instr->cond);
+                printf("[EXEC] IF condition = %d\n", cond);
+                if (cond) {
+                    return exec_instructions(instr->if_body);
+                } else if (instr->else_body) {
+                    return exec_instructions(instr->else_body);
+                }
+                break;
+            }
         }
         instr = instr->next;
     }
+    return 0;
 }
 
-#line 252 "algo.tab.c"
+#line 277 "algo.tab.c"
 
 # ifndef YY_CAST
 #  ifdef __cplusplus
@@ -285,40 +310,43 @@ enum yysymbol_kind_t
   YYSYMBOL_TRETURN = 6,                    /* TRETURN  */
   YYSYMBOL_TIF = 7,                        /* TIF  */
   YYSYMBOL_TELSE = 8,                      /* TELSE  */
-  YYSYMBOL_TDOWHILE = 9,                   /* TDOWHILE  */
-  YYSYMBOL_TDOFORI = 10,                   /* TDOFORI  */
-  YYSYMBOL_TOD = 11,                       /* TOD  */
-  YYSYMBOL_TCALL = 12,                     /* TCALL  */
-  YYSYMBOL_TBEGINALGO = 13,                /* TBEGINALGO  */
-  YYSYMBOL_TENDALGO = 14,                  /* TENDALGO  */
-  YYSYMBOL_PLUS = 15,                      /* PLUS  */
-  YYSYMBOL_MINUS = 16,                     /* MINUS  */
-  YYSYMBOL_TIMES = 17,                     /* TIMES  */
-  YYSYMBOL_DIVIDE = 18,                    /* DIVIDE  */
-  YYSYMBOL_ASSIGN = 19,                    /* ASSIGN  */
-  YYSYMBOL_EQ = 20,                        /* EQ  */
-  YYSYMBOL_NEQ = 21,                       /* NEQ  */
-  YYSYMBOL_LE = 22,                        /* LE  */
-  YYSYMBOL_GE = 23,                        /* GE  */
-  YYSYMBOL_LT = 24,                        /* LT  */
-  YYSYMBOL_GT = 25,                        /* GT  */
-  YYSYMBOL_AND = 26,                       /* AND  */
-  YYSYMBOL_OR = 27,                        /* OR  */
-  YYSYMBOL_NOT = 28,                       /* NOT  */
-  YYSYMBOL_LBRACE = 29,                    /* LBRACE  */
-  YYSYMBOL_RBRACE = 30,                    /* RBRACE  */
-  YYSYMBOL_COMMA = 31,                     /* COMMA  */
-  YYSYMBOL_YYACCEPT = 32,                  /* $accept  */
-  YYSYMBOL_programme = 33,                 /* programme  */
-  YYSYMBOL_call_stmt = 34,                 /* call_stmt  */
-  YYSYMBOL_algos = 35,                     /* algos  */
-  YYSYMBOL_algo = 36,                      /* algo  */
-  YYSYMBOL_params = 37,                    /* params  */
-  YYSYMBOL_bloc = 38,                      /* bloc  */
-  YYSYMBOL_instruction = 39,               /* instruction  */
-  YYSYMBOL_for_block = 40,                 /* for_block  */
-  YYSYMBOL_args = 41,                      /* args  */
-  YYSYMBOL_expression = 42                 /* expression  */
+  YYSYMBOL_TFI = 9,                        /* TFI  */
+  YYSYMBOL_TDOWHILE = 10,                  /* TDOWHILE  */
+  YYSYMBOL_TDOFORI = 11,                   /* TDOFORI  */
+  YYSYMBOL_TOD = 12,                       /* TOD  */
+  YYSYMBOL_TCALL = 13,                     /* TCALL  */
+  YYSYMBOL_TBEGINALGO = 14,                /* TBEGINALGO  */
+  YYSYMBOL_TENDALGO = 15,                  /* TENDALGO  */
+  YYSYMBOL_PLUS = 16,                      /* PLUS  */
+  YYSYMBOL_MINUS = 17,                     /* MINUS  */
+  YYSYMBOL_TIMES = 18,                     /* TIMES  */
+  YYSYMBOL_DIVIDE = 19,                    /* DIVIDE  */
+  YYSYMBOL_ASSIGN = 20,                    /* ASSIGN  */
+  YYSYMBOL_EQ = 21,                        /* EQ  */
+  YYSYMBOL_NEQ = 22,                       /* NEQ  */
+  YYSYMBOL_LE = 23,                        /* LE  */
+  YYSYMBOL_GE = 24,                        /* GE  */
+  YYSYMBOL_LT = 25,                        /* LT  */
+  YYSYMBOL_GT = 26,                        /* GT  */
+  YYSYMBOL_AND = 27,                       /* AND  */
+  YYSYMBOL_OR = 28,                        /* OR  */
+  YYSYMBOL_NOT = 29,                       /* NOT  */
+  YYSYMBOL_LBRACE = 30,                    /* LBRACE  */
+  YYSYMBOL_RBRACE = 31,                    /* RBRACE  */
+  YYSYMBOL_COMMA = 32,                     /* COMMA  */
+  YYSYMBOL_YYACCEPT = 33,                  /* $accept  */
+  YYSYMBOL_programme = 34,                 /* programme  */
+  YYSYMBOL_call_stmt = 35,                 /* call_stmt  */
+  YYSYMBOL_algos = 36,                     /* algos  */
+  YYSYMBOL_algo = 37,                      /* algo  */
+  YYSYMBOL_params = 38,                    /* params  */
+  YYSYMBOL_bloc = 39,                      /* bloc  */
+  YYSYMBOL_instruction = 40,               /* instruction  */
+  YYSYMBOL_for_block = 41,                 /* for_block  */
+  YYSYMBOL_if_block = 42,                  /* if_block  */
+  YYSYMBOL_else_block = 43,                /* else_block  */
+  YYSYMBOL_args = 44,                      /* args  */
+  YYSYMBOL_expression = 45                 /* expression  */
 };
 typedef enum yysymbol_kind_t yysymbol_kind_t;
 
@@ -646,19 +674,19 @@ union yyalloc
 /* YYFINAL -- State number of the termination state.  */
 #define YYFINAL  6
 /* YYLAST -- Last index in YYTABLE.  */
-#define YYLAST   86
+#define YYLAST   129
 
 /* YYNTOKENS -- Number of terminals.  */
-#define YYNTOKENS  32
+#define YYNTOKENS  33
 /* YYNNTS -- Number of nonterminals.  */
-#define YYNNTS  11
+#define YYNNTS  13
 /* YYNRULES -- Number of rules.  */
-#define YYNRULES  25
+#define YYNRULES  32
 /* YYNSTATES -- Number of states.  */
-#define YYNSTATES  71
+#define YYNSTATES  92
 
 /* YYMAXUTOK -- Last valid token kind.  */
-#define YYMAXUTOK   286
+#define YYMAXUTOK   287
 
 
 /* YYTRANSLATE(TOKEN-NUM) -- Symbol number corresponding to TOKEN-NUM
@@ -700,16 +728,17 @@ static const yytype_int8 yytranslate[] =
        2,     2,     2,     2,     2,     2,     1,     2,     3,     4,
        5,     6,     7,     8,     9,    10,    11,    12,    13,    14,
       15,    16,    17,    18,    19,    20,    21,    22,    23,    24,
-      25,    26,    27,    28,    29,    30,    31
+      25,    26,    27,    28,    29,    30,    31,    32
 };
 
 #if YYDEBUG
 /* YYRLINE[YYN] -- Source line where rule number YYN was defined.  */
 static const yytype_int16 yyrline[] =
 {
-       0,   209,   209,   215,   222,   223,   227,   241,   242,   243,
-     247,   248,   258,   267,   275,   284,   288,   302,   303,   304,
-     308,   315,   322,   330,   338,   346
+       0,   234,   234,   240,   248,   249,   253,   266,   267,   268,
+     272,   273,   282,   290,   297,   305,   306,   310,   323,   335,
+     336,   340,   341,   342,   346,   352,   358,   365,   372,   379,
+     386,   393,   400
 };
 #endif
 
@@ -726,11 +755,12 @@ static const char *yysymbol_name (yysymbol_kind_t yysymbol) YY_ATTRIBUTE_UNUSED;
 static const char *const yytname[] =
 {
   "\"end of file\"", "error", "\"invalid token\"", "IDENTIFIER", "NUMBER",
-  "TSET", "TRETURN", "TIF", "TELSE", "TDOWHILE", "TDOFORI", "TOD", "TCALL",
-  "TBEGINALGO", "TENDALGO", "PLUS", "MINUS", "TIMES", "DIVIDE", "ASSIGN",
-  "EQ", "NEQ", "LE", "GE", "LT", "GT", "AND", "OR", "NOT", "LBRACE",
-  "RBRACE", "COMMA", "$accept", "programme", "call_stmt", "algos", "algo",
-  "params", "bloc", "instruction", "for_block", "args", "expression", YY_NULLPTR
+  "TSET", "TRETURN", "TIF", "TELSE", "TFI", "TDOWHILE", "TDOFORI", "TOD",
+  "TCALL", "TBEGINALGO", "TENDALGO", "PLUS", "MINUS", "TIMES", "DIVIDE",
+  "ASSIGN", "EQ", "NEQ", "LE", "GE", "LT", "GT", "AND", "OR", "NOT",
+  "LBRACE", "RBRACE", "COMMA", "$accept", "programme", "call_stmt",
+  "algos", "algo", "params", "bloc", "instruction", "for_block",
+  "if_block", "else_block", "args", "expression", YY_NULLPTR
 };
 
 static const char *
@@ -740,7 +770,7 @@ yysymbol_name (yysymbol_kind_t yysymbol)
 }
 #endif
 
-#define YYPACT_NINF (-34)
+#define YYPACT_NINF (-61)
 
 #define yypact_value_is_default(Yyn) \
   ((Yyn) == YYPACT_NINF)
@@ -754,14 +784,16 @@ yysymbol_name (yysymbol_kind_t yysymbol)
    STATE-NUM.  */
 static const yytype_int8 yypact[] =
 {
-       9,   -23,    24,     8,   -34,    27,   -34,     3,   -34,   -34,
-      14,    51,    37,    38,    64,    40,   -34,    -2,    49,    36,
-      67,   -34,   -34,    32,    43,    42,    44,    46,    69,    33,
-     -34,   -34,   -34,   -34,    49,    49,    49,    49,    49,    71,
-      49,    73,    47,   -34,   -34,    43,    43,    43,    43,    43,
-      48,    -7,    50,    52,    53,   -34,    54,    49,    49,    49,
-      34,    -3,     1,   -34,   -34,    55,    49,    19,    36,    45,
-     -34
+      11,   -13,    33,    14,   -61,    36,   -61,    19,   -61,   -61,
+      10,    71,    46,    53,    93,    78,   -61,    20,    69,    84,
+     106,   -61,   -61,    80,    23,    82,    83,    85,    86,    87,
+     108,    25,   -61,   -61,   -61,   -61,   109,   -61,    69,    69,
+      69,    69,    69,    69,    69,   111,    69,    69,   115,    88,
+     -61,   -61,    89,    82,    82,    82,    82,    82,    82,    82,
+      90,    -5,     3,    91,    94,    95,    96,   -61,    84,    97,
+      69,    69,    69,    72,    69,    73,    75,    27,    84,   114,
+      44,   -61,   -61,   -61,    84,   -61,    98,    69,    50,    84,
+      81,   -61
 };
 
 /* YYDEFACT[STATE-NUM] -- Default reduction number in state STATE-NUM.
@@ -770,27 +802,29 @@ static const yytype_int8 yypact[] =
 static const yytype_int8 yydefact[] =
 {
        0,     0,     0,     0,     4,     0,     1,     0,     2,     5,
-       0,     0,     0,     0,     7,     0,     8,     0,    17,     0,
-       0,    21,    20,     0,    18,     0,     0,     0,     0,     0,
-      10,    15,     9,     3,     0,     0,     0,     0,     0,     0,
-       0,     0,     0,     6,    11,    19,    22,    23,    24,    25,
-       0,     0,     0,     0,     0,    13,     0,    17,     0,     0,
-       0,     0,     0,    14,    12,     0,     0,     0,     0,     0,
-      16
+       0,     0,     0,     0,     7,     0,     8,     0,    21,     0,
+       0,    25,    24,     0,     0,    22,     0,     0,     0,     0,
+       0,     0,    10,    15,    16,     9,     0,     3,     0,     0,
+       0,     0,     0,     0,     0,     0,     0,     0,     0,     0,
+       6,    11,     0,    23,    26,    27,    28,    29,    31,    30,
+       0,     0,     0,     0,     0,     0,     0,    13,     0,     0,
+      21,    21,     0,    19,     0,     0,     0,     0,     0,     0,
+       0,    14,    32,    12,    20,    18,     0,     0,     0,     0,
+       0,    17
 };
 
 /* YYPGOTO[NTERM-NUM].  */
 static const yytype_int8 yypgoto[] =
 {
-     -34,   -34,   -34,   -34,    76,   -34,    17,   -29,   -34,    29,
-     -33
+     -61,   -61,   -61,   -61,   126,   -61,   -60,   -31,   -61,   -61,
+     -61,   -14,   -37
 };
 
 /* YYDEFGOTO[NTERM-NUM].  */
 static const yytype_int8 yydefgoto[] =
 {
-       0,     2,     8,     3,     4,    17,    29,    30,    31,    23,
-      24
+       0,     2,     8,     3,     4,    17,    31,    32,    33,    34,
+      79,    24,    25
 };
 
 /* YYTABLE[YYPACT[STATE-NUM]] -- What to do in state STATE-NUM.  If
@@ -798,58 +832,70 @@ static const yytype_int8 yydefgoto[] =
    number is the opposite.  If YYTABLE_NINF, syntax error.  */
 static const yytype_int8 yytable[] =
 {
-      44,    45,    46,    47,    48,    49,     5,    51,    35,    36,
-      37,    38,    35,    36,    37,    38,    35,    36,    37,    38,
-       7,     1,     1,    55,     6,    61,    62,    64,    19,    20,
-      10,    65,    11,    67,    35,    36,    37,    38,    25,    26,
-      44,    25,    26,    27,    12,    28,    27,    43,    28,    68,
-      25,    26,    21,    22,    13,    27,    70,    28,    35,    36,
-      37,    38,    33,    34,    63,    34,    14,    16,    15,    18,
-      32,    39,    42,    40,    50,    41,    52,    53,    54,     9,
-      56,    57,    58,    59,    66,    69,    60
+      51,    53,    54,    55,    56,    57,    58,    59,    73,    61,
+      62,    39,    40,    41,    42,    43,    44,     5,    84,    39,
+      40,    41,    42,    43,    44,     1,    67,     7,     1,    90,
+      26,    27,    28,     6,    68,    77,    29,    80,    30,    10,
+      50,    12,    51,    39,    40,    41,    42,    43,    44,    11,
+      88,    19,    20,    51,    37,    38,    75,    76,    83,    51,
+      39,    40,    41,    42,    43,    44,    39,    40,    41,    42,
+      43,    44,    21,    22,    13,    86,    14,    26,    27,    28,
+      78,    89,    23,    29,    15,    30,    26,    27,    28,    26,
+      27,    28,    29,    91,    30,    29,    16,    30,    39,    40,
+      41,    42,    43,    44,    81,    38,    82,    38,    18,    35,
+      36,    49,    52,    45,    60,    46,    47,    48,    63,    64,
+      65,    66,    69,    85,    70,    71,    72,    74,    87,     9
 };
 
 static const yytype_int8 yycheck[] =
 {
-      29,    34,    35,    36,    37,    38,    29,    40,    15,    16,
-      17,    18,    15,    16,    17,    18,    15,    16,    17,    18,
-      12,    13,    13,    30,     0,    58,    59,    30,    30,    31,
-       3,    30,    29,    66,    15,    16,    17,    18,     5,     6,
-      69,     5,     6,    10,    30,    12,    10,    14,    12,    30,
-       5,     6,     3,     4,     3,    10,    11,    12,    15,    16,
-      17,    18,    30,    31,    30,    31,    29,     3,    30,    29,
-       3,    29,     3,    29,     3,    29,     3,    30,    30,     3,
-      30,    29,    29,    29,    29,    68,    57
+      31,    38,    39,    40,    41,    42,    43,    44,    68,    46,
+      47,    16,    17,    18,    19,    20,    21,    30,    78,    16,
+      17,    18,    19,    20,    21,    14,    31,    13,    14,    89,
+       5,     6,     7,     0,    31,    72,    11,    74,    13,     3,
+      15,    31,    73,    16,    17,    18,    19,    20,    21,    30,
+      87,    31,    32,    84,    31,    32,    70,    71,    31,    90,
+      16,    17,    18,    19,    20,    21,    16,    17,    18,    19,
+      20,    21,     3,     4,     3,    31,    30,     5,     6,     7,
+       8,    31,    13,    11,    31,    13,     5,     6,     7,     5,
+       6,     7,    11,    12,    13,    11,     3,    13,    16,    17,
+      18,    19,    20,    21,    31,    32,    31,    32,    30,     3,
+      30,     3,     3,    30,     3,    30,    30,    30,     3,    31,
+      31,    31,    31,     9,    30,    30,    30,    30,    30,     3
 };
 
 /* YYSTOS[STATE-NUM] -- The symbol kind of the accessing symbol of
    state STATE-NUM.  */
 static const yytype_int8 yystos[] =
 {
-       0,    13,    33,    35,    36,    29,     0,    12,    34,    36,
-       3,    29,    30,     3,    29,    30,     3,    37,    29,    30,
-      31,     3,     4,    41,    42,     5,     6,    10,    12,    38,
-      39,    40,     3,    30,    31,    15,    16,    17,    18,    29,
-      29,    29,     3,    14,    39,    42,    42,    42,    42,    42,
-       3,    42,     3,    30,    30,    30,    30,    29,    29,    29,
-      41,    42,    42,    30,    30,    30,    29,    42,    30,    38,
-      11
+       0,    14,    34,    36,    37,    30,     0,    13,    35,    37,
+       3,    30,    31,     3,    30,    31,     3,    38,    30,    31,
+      32,     3,     4,    13,    44,    45,     5,     6,     7,    11,
+      13,    39,    40,    41,    42,     3,    30,    31,    32,    16,
+      17,    18,    19,    20,    21,    30,    30,    30,    30,     3,
+      15,    40,     3,    45,    45,    45,    45,    45,    45,    45,
+       3,    45,    45,     3,    31,    31,    31,    31,    31,    31,
+      30,    30,    30,    39,    30,    44,    44,    45,     8,    43,
+      45,    31,    31,    31,    39,     9,    31,    30,    45,    31,
+      39,    12
 };
 
 /* YYR1[RULE-NUM] -- Symbol kind of the left-hand side of rule RULE-NUM.  */
 static const yytype_int8 yyr1[] =
 {
-       0,    32,    33,    34,    35,    35,    36,    37,    37,    37,
-      38,    38,    39,    39,    39,    39,    40,    41,    41,    41,
-      42,    42,    42,    42,    42,    42
+       0,    33,    34,    35,    36,    36,    37,    38,    38,    38,
+      39,    39,    40,    40,    40,    40,    40,    41,    42,    43,
+      43,    44,    44,    44,    45,    45,    45,    45,    45,    45,
+      45,    45,    45
 };
 
 /* YYR2[RULE-NUM] -- Number of symbols on the right-hand side of rule RULE-NUM.  */
 static const yytype_int8 yyr2[] =
 {
        0,     2,     2,     7,     1,     2,     9,     0,     1,     3,
-       1,     2,     7,     4,     6,     1,    12,     0,     1,     3,
-       1,     1,     3,     3,     3,     3
+       1,     2,     7,     4,     6,     1,     1,    12,     7,     0,
+       2,     0,     1,     3,     1,     1,     3,     3,     3,     3,
+       3,     3,     7
 };
 
 
@@ -1313,78 +1359,76 @@ yyreduce:
   switch (yyn)
     {
   case 2: /* programme: algos call_stmt  */
-#line 209 "algo.y"
+#line 234 "algo.y"
                     {
         printf("[DEBUG] programme → algos call_stmt\n");
     }
-#line 1321 "algo.tab.c"
+#line 1367 "algo.tab.c"
     break;
 
   case 3: /* call_stmt: TCALL LBRACE IDENTIFIER RBRACE LBRACE args RBRACE  */
-#line 215 "algo.y"
+#line 240 "algo.y"
                                                       {
         printf("[DEBUG] call_stmt → CALL {%s} {%p}\n", (yyvsp[-4].str), (yyvsp[-1].arglist));
-        call_function((yyvsp[-4].str), (yyvsp[-1].arglist));
+        int res = call_function((yyvsp[-4].str), (yyvsp[-1].arglist));
+        printf("[RESULT] Résultat de l'appel à %s : %d\n", (yyvsp[-4].str), res);
     }
-#line 1330 "algo.tab.c"
+#line 1377 "algo.tab.c"
     break;
 
   case 6: /* algo: TBEGINALGO LBRACE IDENTIFIER RBRACE LBRACE params RBRACE bloc TENDALGO  */
-#line 227 "algo.y"
+#line 253 "algo.y"
                                                                            {
+        printf("[DEBUG] algo → begin %s\n", (yyvsp[-6].str));
         algo_table[algo_count].name = strdup((yyvsp[-6].str));
         algo_table[algo_count].param_count = param_index;
-        for (int i = 0; i < param_index; i++) {
+        for (int i = 0; i < param_index; i++)
             algo_table[algo_count].params[i] = strdup(param_list[i]);
-        }
         algo_table[algo_count].instructions = (yyvsp[-1].instr);
-        printf("Algo stocké : %s (%d param)\n", (yyvsp[-6].str), param_index);
         algo_count++;
         param_index = 0;
     }
-#line 1346 "algo.tab.c"
+#line 1392 "algo.tab.c"
     break;
 
   case 7: /* params: %empty  */
-#line 241 "algo.y"
-               { printf("[DEBUG] params → vide\n"); param_index = 0; }
-#line 1352 "algo.tab.c"
+#line 266 "algo.y"
+               { param_index = 0; }
+#line 1398 "algo.tab.c"
     break;
 
   case 8: /* params: IDENTIFIER  */
-#line 242 "algo.y"
-                 { printf("[DEBUG] params → IDENTIFIER %s\n", (yyvsp[0].str)); param_list[param_index++] = strdup((yyvsp[0].str)); }
-#line 1358 "algo.tab.c"
+#line 267 "algo.y"
+                 { param_list[param_index++] = strdup((yyvsp[0].str)); }
+#line 1404 "algo.tab.c"
     break;
 
   case 9: /* params: params COMMA IDENTIFIER  */
-#line 243 "algo.y"
-                              { printf("[DEBUG] params → , %s\n", (yyvsp[0].str)); param_list[param_index++] = strdup((yyvsp[0].str)); }
-#line 1364 "algo.tab.c"
+#line 268 "algo.y"
+                              { param_list[param_index++] = strdup((yyvsp[0].str)); }
+#line 1410 "algo.tab.c"
     break;
 
   case 10: /* bloc: instruction  */
-#line 247 "algo.y"
-                { printf("[DEBUG] bloc → instruction\n"); (yyval.instr) = (yyvsp[0].instr); }
-#line 1370 "algo.tab.c"
+#line 272 "algo.y"
+                { (yyval.instr) = (yyvsp[0].instr); }
+#line 1416 "algo.tab.c"
     break;
 
   case 11: /* bloc: bloc instruction  */
-#line 248 "algo.y"
+#line 273 "algo.y"
                        {
-        printf("[DEBUG] bloc → bloc instruction\n");
         Instruction *last = (yyvsp[-1].instr);
         while (last->next) last = last->next;
         last->next = (yyvsp[0].instr);
         (yyval.instr) = (yyvsp[-1].instr);
     }
-#line 1382 "algo.tab.c"
+#line 1427 "algo.tab.c"
     break;
 
   case 12: /* instruction: TSET LBRACE IDENTIFIER RBRACE LBRACE expression RBRACE  */
-#line 258 "algo.y"
+#line 282 "algo.y"
                                                            {
-        printf("[DEBUG] instruction → SET %s = expr\n", (yyvsp[-4].str));
         Instruction *i = malloc(sizeof(*i));
         i->type = ISET;
         i->var_name = strdup((yyvsp[-4].str));
@@ -1392,26 +1436,24 @@ yyreduce:
         i->next = NULL;
         (yyval.instr) = i;
     }
-#line 1396 "algo.tab.c"
+#line 1440 "algo.tab.c"
     break;
 
   case 13: /* instruction: TRETURN LBRACE expression RBRACE  */
-#line 267 "algo.y"
+#line 290 "algo.y"
                                        {
-        printf("[DEBUG] instruction → RETURN expr\n");
         Instruction *i = malloc(sizeof(*i));
         i->type = IRETURN;
         i->expr = (yyvsp[-1].expr);
         i->next = NULL;
         (yyval.instr) = i;
     }
-#line 1409 "algo.tab.c"
+#line 1452 "algo.tab.c"
     break;
 
   case 14: /* instruction: TCALL IDENTIFIER RBRACE LBRACE args RBRACE  */
-#line 275 "algo.y"
+#line 297 "algo.y"
                                                  {
-        printf("[DEBUG] instruction → CALL %s\n", (yyvsp[-4].str));
         Instruction *i = malloc(sizeof(*i));
         i->type = ICALL;
         i->call_name = strdup((yyvsp[-4].str));
@@ -1419,19 +1461,24 @@ yyreduce:
         i->next = NULL;
         (yyval.instr) = i;
     }
-#line 1423 "algo.tab.c"
+#line 1465 "algo.tab.c"
     break;
 
   case 15: /* instruction: for_block  */
-#line 284 "algo.y"
+#line 305 "algo.y"
                 { (yyval.instr) = (yyvsp[0].instr); }
-#line 1429 "algo.tab.c"
+#line 1471 "algo.tab.c"
     break;
 
-  case 16: /* for_block: TDOFORI LBRACE IDENTIFIER RBRACE LBRACE expression RBRACE LBRACE expression RBRACE bloc TOD  */
-#line 288 "algo.y"
+  case 16: /* instruction: if_block  */
+#line 306 "algo.y"
+               { (yyval.instr) = (yyvsp[0].instr); }
+#line 1477 "algo.tab.c"
+    break;
+
+  case 17: /* for_block: TDOFORI LBRACE IDENTIFIER RBRACE LBRACE expression RBRACE LBRACE expression RBRACE bloc TOD  */
+#line 310 "algo.y"
                                                                                                 {
-        printf("[DEBUG] for_block → FOR %s FROM expr TO expr\n", (yyvsp[-9].str));
         Instruction *i = malloc(sizeof(*i));
         i->type = IFOR;
         i->loop_var = strdup((yyvsp[-9].str));
@@ -1441,105 +1488,161 @@ yyreduce:
         i->next = NULL;
         (yyval.instr) = i;
     }
-#line 1445 "algo.tab.c"
+#line 1492 "algo.tab.c"
     break;
 
-  case 17: /* args: %empty  */
-#line 302 "algo.y"
-               { printf("[DEBUG] args → vide\n"); (yyval.arglist) = NULL; }
-#line 1451 "algo.tab.c"
+  case 18: /* if_block: TIF LBRACE expression RBRACE bloc else_block TFI  */
+#line 323 "algo.y"
+                                                     {
+        Instruction *i = malloc(sizeof(*i));
+        i->type = IIF;
+        i->cond = (yyvsp[-4].expr);
+        i->if_body = (yyvsp[-2].instr);
+        i->else_body = (yyvsp[-1].instr);
+        i->next = NULL;
+        (yyval.instr) = i;
+    }
+#line 1506 "algo.tab.c"
     break;
 
-  case 18: /* args: expression  */
-#line 303 "algo.y"
-                 { printf("[DEBUG] args → expr\n"); (yyval.arglist) = new_arg(eval_expr((yyvsp[0].expr))); }
-#line 1457 "algo.tab.c"
+  case 19: /* else_block: %empty  */
+#line 335 "algo.y"
+               { (yyval.instr) = NULL; }
+#line 1512 "algo.tab.c"
     break;
 
-  case 19: /* args: args COMMA expression  */
-#line 304 "algo.y"
-                            { printf("[DEBUG] args → , expr\n"); (yyval.arglist) = add_arg((yyvsp[-2].arglist), eval_expr((yyvsp[0].expr))); }
-#line 1463 "algo.tab.c"
+  case 20: /* else_block: TELSE bloc  */
+#line 336 "algo.y"
+                 { (yyval.instr) = (yyvsp[0].instr); }
+#line 1518 "algo.tab.c"
     break;
 
-  case 20: /* expression: NUMBER  */
-#line 308 "algo.y"
+  case 21: /* args: %empty  */
+#line 340 "algo.y"
+               { (yyval.arglist) = NULL; }
+#line 1524 "algo.tab.c"
+    break;
+
+  case 22: /* args: expression  */
+#line 341 "algo.y"
+                 { (yyval.arglist) = new_arg((yyvsp[0].expr)); }
+#line 1530 "algo.tab.c"
+    break;
+
+  case 23: /* args: args COMMA expression  */
+#line 342 "algo.y"
+                            { (yyval.arglist) = add_arg((yyvsp[-2].arglist), (yyvsp[0].expr)); }
+#line 1536 "algo.tab.c"
+    break;
+
+  case 24: /* expression: NUMBER  */
+#line 346 "algo.y"
            {
-        printf("[DEBUG] expression → NUMBER %d\n", (yyvsp[0].ival));
         ExprNode *e = malloc(sizeof(*e));
         e->type = E_CONST;
         e->value = (yyvsp[0].ival);
         (yyval.expr) = e;
     }
-#line 1475 "algo.tab.c"
+#line 1547 "algo.tab.c"
     break;
 
-  case 21: /* expression: IDENTIFIER  */
-#line 315 "algo.y"
+  case 25: /* expression: IDENTIFIER  */
+#line 352 "algo.y"
                  {
-        printf("[DEBUG] expression → IDENTIFIER %s\n", (yyvsp[0].str));
         ExprNode *e = malloc(sizeof(*e));
         e->type = E_VAR;
         e->var_name = strdup((yyvsp[0].str));
         (yyval.expr) = e;
     }
-#line 1487 "algo.tab.c"
+#line 1558 "algo.tab.c"
     break;
 
-  case 22: /* expression: expression PLUS expression  */
-#line 322 "algo.y"
+  case 26: /* expression: expression PLUS expression  */
+#line 358 "algo.y"
                                  {
-        printf("[DEBUG] expression → expr + expr\n");
         ExprNode *e = malloc(sizeof(*e));
         e->type = E_ADD;
         e->left = (yyvsp[-2].expr);
         e->right = (yyvsp[0].expr);
         (yyval.expr) = e;
     }
-#line 1500 "algo.tab.c"
+#line 1570 "algo.tab.c"
     break;
 
-  case 23: /* expression: expression MINUS expression  */
-#line 330 "algo.y"
+  case 27: /* expression: expression MINUS expression  */
+#line 365 "algo.y"
                                   {
-        printf("[DEBUG] expression → expr - expr\n");
         ExprNode *e = malloc(sizeof(*e));
         e->type = E_SUB;
         e->left = (yyvsp[-2].expr);
         e->right = (yyvsp[0].expr);
         (yyval.expr) = e;
     }
-#line 1513 "algo.tab.c"
+#line 1582 "algo.tab.c"
     break;
 
-  case 24: /* expression: expression TIMES expression  */
-#line 338 "algo.y"
+  case 28: /* expression: expression TIMES expression  */
+#line 372 "algo.y"
                                   {
-        printf("[DEBUG] expression → expr * expr\n");
         ExprNode *e = malloc(sizeof(*e));
         e->type = E_MUL;
         e->left = (yyvsp[-2].expr);
         e->right = (yyvsp[0].expr);
         (yyval.expr) = e;
     }
-#line 1526 "algo.tab.c"
+#line 1594 "algo.tab.c"
     break;
 
-  case 25: /* expression: expression DIVIDE expression  */
-#line 346 "algo.y"
+  case 29: /* expression: expression DIVIDE expression  */
+#line 379 "algo.y"
                                    {
-        printf("[DEBUG] expression → expr / expr\n");
         ExprNode *e = malloc(sizeof(*e));
         e->type = E_DIV;
         e->left = (yyvsp[-2].expr);
         e->right = (yyvsp[0].expr);
         (yyval.expr) = e;
     }
-#line 1539 "algo.tab.c"
+#line 1606 "algo.tab.c"
+    break;
+
+  case 30: /* expression: expression EQ expression  */
+#line 386 "algo.y"
+                               {
+        ExprNode *e = malloc(sizeof(*e));
+        e->type = E_EQ;
+        e->left = (yyvsp[-2].expr);
+        e->right = (yyvsp[0].expr);
+        (yyval.expr) = e;
+    }
+#line 1618 "algo.tab.c"
+    break;
+
+  case 31: /* expression: expression ASSIGN expression  */
+#line 393 "algo.y"
+                                   {
+        ExprNode *e = malloc(sizeof(*e));
+        e->type = E_EQ;
+        e->left = (yyvsp[-2].expr);
+        e->right = (yyvsp[0].expr);
+        (yyval.expr) = e;
+    }
+#line 1630 "algo.tab.c"
+    break;
+
+  case 32: /* expression: TCALL LBRACE IDENTIFIER RBRACE LBRACE args RBRACE  */
+#line 400 "algo.y"
+                                                        {
+        ExprNode *e = malloc(sizeof(*e));
+        e->type = E_CALL;
+        e->call_name = strdup((yyvsp[-4].str));
+        e->args = (yyvsp[-1].arglist);
+        (yyval.expr) = e;
+    }
+#line 1642 "algo.tab.c"
     break;
 
 
-#line 1543 "algo.tab.c"
+#line 1646 "algo.tab.c"
 
       default: break;
     }
@@ -1732,7 +1835,7 @@ yyreturnlab:
   return yyresult;
 }
 
-#line 356 "algo.y"
+#line 407 "algo.y"
 
 
 void yyerror(const char *s) {
@@ -1740,5 +1843,8 @@ void yyerror(const char *s) {
 }
 
 int main(void) {
-    return yyparse();
+    printf("[INFO] Début du parsing\n");
+    yyparse();
+    printf("[INFO] Fin d'exécution\n");
+    return 0;
 }
